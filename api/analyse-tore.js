@@ -9,7 +9,6 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Méthode non autorisée" });
 
-  // Clé API côté serveur
   if (!process.env.OPENAI_API_KEY) {
     return res.status(500).json({ error: "OPENAI_API_KEY absente côté serveur" });
   }
@@ -17,18 +16,16 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {};
 
-    // Helpers
     const safe = v => (typeof v === "string" && v.trim()) ? v.trim() : "—";
     const sym = s => {
-  if (!s || typeof s !== "string") return "—";
-  if (s.includes("⚫")) return "⚫";
-  if (s.includes("🔺")) return "🔺";
-  return "—";
-};
-
+      if (!s || typeof s !== "string") return "—";
+      const normalized = s.normalize("NFKD");
+      if (normalized.includes("⚫") || /\u26AB/.test(normalized)) return "⚫";
+      if (normalized.includes("🔺") || /\u25B2/.test(normalized) || /\u1F53A/.test(normalized)) return "🔺";
+      return "—";
+    };
     const norm = o => ({ carte: safe(o?.carte), polarite: sym(o?.polarite), piece: sym(o?.piece) });
 
-    // Familles du Tore
     const fam = body.familles || {};
     const emotions       = norm(fam.emotions);
     const besoins        = norm(fam.besoins);
@@ -42,8 +39,9 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Familles incomplètes pour le Tore" });
     }
 
-    // Cartes passerelles (serveur)
-    const isPass = (polCarte, polPiece) => (polCarte !== "—" && polPiece !== "—" && polCarte !== polPiece);
+    const isPass = (polCarte, polPiece) =>
+      (polCarte !== "—" && polPiece !== "—" && polCarte !== polPiece);
+
     const pass = {
       emotions:      isPass(emotions.polarite,      emotions.piece),
       besoins:       isPass(besoins.polarite,       besoins.piece),
@@ -53,27 +51,26 @@ export default async function handler(req, res) {
       actions:       isPass(actions.polarite,       actions.piece),
     };
 
-    // ——— Prompt strict : symboles + explication féminine/masculine, "cartes passerelles" ———
     const SYSTEM = `
 Tu es l’analyste officiel d’Oradia pour le Tirage du Tore.
 
 Règles :
 - Polarité : affiche toujours le symbole (⚫ ou 🔺).
-  ⚫ = énergie féminine, 🔺 = énergie masculine. Tu peux rappeler cette correspondance de manière simple.
-- "Carte passerelle" UNIQUEMENT si le drapeau fourni (passerelle=true) pour la ligne concernée.
-- Familles (par lignes) :
+  ⚫ = énergie féminine, 🔺 = énergie masculine.
+- "Carte passerelle" UNIQUEMENT si passerelle=true.
+- Familles :
   L1 — ÉMOTIONS
   L2 — BESOINS
   L3 — TRANSMUTATIONS
   L4 — ARCHÉTYPES
   L5 — RÉVÉLATIONS
   L6 — ACTIONS
-  L7 — MÉMOIRES COSMOS (sans polarité propre).
-- Style Oradia : poétique, clair, ancré ; relie l’ensemble à l’intention.
+  L7 — MÉMOIRES COSMOS (pas de polarité).
+- Style Oradia : poétique, clair, ancré.
 
-Affichage final (sans préambule, sans visuel) :
+Affichage final :
 Votre Tirage du Tore:
-Ligne 1 – ÉMOTIONS       : {NomCarte} ({Symbole} = énergie féminine/masculine) {— carte passerelle : … si passerelle=true}
+Ligne 1 – ÉMOTIONS       : {…}
 Ligne 2 – BESOINS        : {…}
 Ligne 3 – TRANSMUTATIONS : {…}
 Ligne 4 – ARCHÉTYPES     : {…}
@@ -88,24 +85,16 @@ Synthèse du tirage :
     const USER = `
 Intention: ${safe(body.intention)}
 
-Entrées normalisées (ne pas modifier les symboles) + flags passerelle:
-- L1 ÉMOTIONS      : nom="${emotions.carte}",       symbole="${emotions.polarite}",       piece="${emotions.piece}",       passerelle=${pass.emotions}
-- L2 BESOINS       : nom="${besoins.carte}",        symbole="${besoins.polarite}",        piece="${besoins.piece}",        passerelle=${pass.besoins}
-- L3 TRANSMUTATIONS: nom="${transmutation.carte}",  symbole="${transmutation.polarite}",  piece="${transmutation.piece}",  passerelle=${pass.transmutation}
-- L4 ARCHÉTYPES    : nom="${archetypes.carte}",     symbole="${archetypes.polarite}",     piece="${archetypes.piece}",     passerelle=${pass.archetypes}
-- L5 RÉVÉLATIONS   : nom="${revelations.carte}",    symbole="${revelations.polarite}",    piece="${revelations.piece}",    passerelle=${pass.revelations}
-- L6 ACTIONS       : nom="${actions.carte}",        symbole="${actions.polarite}",        piece="${actions.piece}",        passerelle=${pass.actions}
-- L7 MÉMOIRES COSMOS: "${memoireCosmos}"
-
-Consignes :
-- Réutilise EXACTEMENT les symboles fournis (🔺, ⚫, ou '—' → alors pas de symbole).
-- Ajoute “— carte passerelle : …” UNIQUEMENT si passerelle=true sur la ligne correspondante.
-- Mention explicative possible : "(⚫ = énergie féminine, 🔺 = énergie masculine)" lorsque pertinent.
+Entrées + passerelles:
+- L1 ÉMOTIONS      : ${emotions.carte} (${emotions.polarite}), piece=${emotions.piece}, passerelle=${pass.emotions}
+- L2 BESOINS       : ${besoins.carte} (${besoins.polarite}), piece=${besoins.piece}, passerelle=${pass.besoins}
+- L3 TRANSMUTATIONS: ${transmutation.carte} (${transmutation.polarite}), piece=${transmutation.piece}, passerelle=${pass.transmutation}
+- L4 ARCHÉTYPES    : ${archetypes.carte} (${archetypes.polarite}), piece=${archetypes.piece}, passerelle=${pass.archetypes}
+- L5 RÉVÉLATIONS   : ${revelations.carte} (${revelations.polarite}), piece=${revelations.piece}, passerelle=${pass.revelations}
+- L6 ACTIONS       : ${actions.carte} (${actions.polarite}), piece=${actions.piece}, passerelle=${pass.actions}
+- L7 MÉMOIRES COSMOS: ${memoireCosmos}
 `.trim();
 
-    console.log("API Key côté serveur ?", process.env.OPENAI_API_KEY ? "OK" : "ABSENTE");
-
-    // Timeout (25s)
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 25_000);
 
