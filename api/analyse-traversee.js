@@ -43,6 +43,9 @@ Boussole:
 Mutations: ${JSON.stringify(body.mutations || [])}
 `.trim();
 
+    // DEBUG : vérifier que la clé est vue côté serveur
+    console.log("API Key visible côté serveur ?", process.env.OPENAI_API_KEY ? "OK" : "ABSENTE");
+
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -62,6 +65,7 @@ Mutations: ${JSON.stringify(body.mutations || [])}
 
     if (!r.ok) {
       const err = await r.text();
+      console.error("Erreur API OpenAI:", err); // log côté serveur
       return res.status(500).json({ error: `IA error: ${err}` });
     }
 
@@ -69,6 +73,7 @@ Mutations: ${JSON.stringify(body.mutations || [])}
     const texte = (data.choices?.[0]?.message?.content || "").trim();
     return res.status(200).json({ ok: true, texte });
   } catch (e) {
+    console.error("Erreur serveur:", e);
     return res.status(500).json({ error: e?.message || "Erreur serveur" });
   }
 }
