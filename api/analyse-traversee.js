@@ -19,11 +19,12 @@ export default async function handler(req, res) {
 
     // Helpers
     const safe = v => (typeof v === "string" && v.trim()) ? v.trim() : "—";
+    // Reconnaît ⚫ / 🔺 même si encodés (PowerShell/Unicode)
     const sym = s => {
       if (!s || typeof s !== "string") return "—";
-      const normalized = s.normalize("NFKD");
-      if (normalized.includes("⚫") || /\u26AB/.test(normalized)) return "⚫"; // cercle noir
-      if (normalized.includes("🔺") || /\u25B2/.test(normalized) || /\u1F53A/.test(normalized)) return "🔺"; // triangle
+      const n = s.normalize("NFKD");
+      if (n.includes("⚫") || /\u26AB/.test(n)) return "⚫";
+      if (n.includes("🔺") || /\u25B2/.test(n) || /\u1F53A/.test(n)) return "🔺";
       return "—";
     };
     const pick = o => ({ carte: safe(o?.carte), polarite: sym(o?.polarite) });
@@ -46,10 +47,9 @@ export default async function handler(req, res) {
       actions:      sym(body?.mutations?.actionsPiece),
     };
 
-    const isPass = (polCarte, polPiece) =>
-      (polCarte !== "—" && polPiece !== "—" && polCarte !== polPiece);
-
-    const pass = {
+    // Passerelles (serveur)
+    const isPass = (polCarte, polPiece) => (polCarte !== "—" && polPiece !== "—" && polCarte !== polPiece);
+    const passFlags = {
       emotions:     isPass(nord.polarite,  piece.emotions),
       besoins:      isPass(sud.polarite,   piece.besoins),
       revelations:  isPass(est.polarite,   piece.revelations),
@@ -57,43 +57,39 @@ export default async function handler(req, res) {
     };
 
     const memoireCosmos = safe(body?.memoireCosmos);
+    const intention = safe(body?.intention);
 
+    // 1) Appel IA —> ne demande QUE les textes des passerelles (si flag=true) + synthèse, en JSON strict.
     const SYSTEM = `
-Tu es l’analyste officiel d’Oradia pour le Tirage de la Traversée.
+Tu rends uniquement un JSON valide et minimal, sans texte parasite ni balise de code.
+Schéma exact:
+{
+  "passerelles": {
+    "emotions": "string | ''",
+    "besoins": "string | ''",
+    "revelations": "string | ''",
+    "actions": "string | ''"
+  },
+  "synthese": "string"
+}
 
-Règles STRICTES :
-- Chaque ligne doit suivre exactement ce format :
-  Ligne X – NOMFAMILLE : NomCarte (Symbole = énergie féminine/masculine){— carte passerelle : … si passerelle=true}
-- Utilise uniquement le symbole fourni (⚫ ou 🔺). Si '—', n’affiche aucun symbole.
-- Ne jamais déplacer le symbole ni écrire avant le nom de la carte.
-- La carte Mémoires Cosmos s’affiche sans symbole.
-- Ajoute ensuite la synthèse du tirage.
-- "Carte passerelle" UNIQUEMENT si passerelle=true.
-- Mémoires Cosmos : pas de polarité.
-- Style Oradia : poétique, clair, ancré.
-
-Affichage final :
-Votre Tirage de la traversée:
-Ligne 1 – ÉMOTIONS : {NomCarte} ({Symbole} = énergie féminine/masculine) {— carte passerelle : … si passerelle=true}
-Ligne 2 – BESOINS   : …
-Ligne 3 – RÉVÉLATIONS : …
-Ligne 4 – ACTIONS   : …
-Carte Mémoires Cosmos :
-{…}
-Synthèse du tirage :
-{…}
+Guides d'écriture:
+- Style Oradia: poétique, ancré, clair, sans ésotérisme obscur.
+- "Carte passerelle" = donner une phrase courte de passerelle quand demandé (flag=true), sinon renvoyer "".
+- Pas de répétition de symboles ici; ne parle pas des symboles. 
+- Ne jamais ajouter de clés JSON non demandées. Pas de trailing commas.
 `.trim();
 
-    const USER = `
-Intention: ${safe(body.intention)}
-
-Entrées + passerelles:
-- L1 ÉMOTIONS     : ${nord.carte} (${nord.polarite}), piece=${piece.emotions}, passerelle=${pass.emotions}
-- L2 BESOINS      : ${sud.carte} (${sud.polarite}), piece=${piece.besoins}, passerelle=${pass.besoins}
-- L3 RÉVÉLATIONS  : ${est.carte} (${est.polarite}), piece=${piece.revelations}, passerelle=${pass.revelations}
-- L4 ACTIONS      : ${ouest.carte} (${ouest.polarite}), piece=${piece.actions}, passerelle=${pass.actions}
-- Carte MÉMOIRES COSMOS: ${memoireCosmos}
-`.trim();
+    const USER = JSON.stringify({
+      intention,
+      cartes: {
+        emotions: { nom: nord.carte, polarite: nord.polarite, piece: piece.emotions, passerelle: passFlags.emotions },
+        besoins:  { nom: sud.carte,  polarite: sud.polarite,  piece: piece.besoins,  passerelle: passFlags.besoins },
+        revelations: { nom: est.carte, polarite: est.polarite, piece: piece.revelations, passerelle: passFlags.revelations },
+        actions:  { nom: ouest.carte, polarite: ouest.polarite, piece: piece.actions, passerelle: passFlags.actions },
+        memoireCosmos
+      }
+    });
 
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 25_000);
@@ -107,7 +103,8 @@ Entrées + passerelles:
       body: JSON.stringify({
         model: "gpt-4o-mini",
         temperature: 0.6,
-        max_tokens: 900,
+        max_tokens: 700,
+        response_format: { type: "json_object" },
         messages: [
           { role: "system", content: SYSTEM },
           { role: "user", content: USER }
@@ -123,7 +120,41 @@ Entrées + passerelles:
     }
 
     const data = await r.json();
-    const texte = (data.choices?.[0]?.message?.content || "").trim();
+    let payload;
+    try { payload = JSON.parse(data.choices?.[0]?.message?.content || "{}"); }
+    catch { payload = {}; }
+
+    const P = payload?.passerelles || {};
+    const synthese = (payload?.synthese || "").trim();
+
+    // 2) Assemblage côté serveur : symboles et passerelles sont sous notre contrôle.
+    const polText = s => s === "⚫" ? "⚫ = énergie féminine" : s === "🔺" ? "🔺 = énergie masculine" : null;
+    const fmtLine = (label, nom, pol, passKey) => {
+      const parts = [];
+      parts.push(`${label} : ${nom}`);
+      const ptxt = polText(pol);
+      if (ptxt) parts[0] += ` (${ptxt})`;
+      const pmsg = (P?.[passKey] || "").trim();
+      if (passFlags[passKey] && pmsg) parts.push(`— carte passerelle : ${pmsg}`);
+      return parts.join(" ");
+    };
+
+    const lignes = [
+      fmtLine("Ligne 1 – ÉMOTIONS",     nord.carte,  nord.polarite,  "emotions"),
+      fmtLine("Ligne 2 – BESOINS",      sud.carte,   sud.polarite,   "besoins"),
+      fmtLine("Ligne 3 – RÉVÉLATIONS",  est.carte,   est.polarite,   "revelations"),
+      fmtLine("Ligne 4 – ACTIONS",      ouest.carte, ouest.polarite, "actions"),
+    ];
+
+    const texte =
+`Votre Tirage de la traversée:
+${lignes.join("\n")}
+Carte Mémoires Cosmos :
+${memoireCosmos}
+
+Synthèse du tirage :
+${synthese || "—"}`;
+
     return res.status(200).json({ ok: true, texte });
   } catch (e) {
     console.error("Erreur serveur [traversee]:", e);
