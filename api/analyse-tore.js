@@ -2,11 +2,38 @@
 export const config = { runtime: "nodejs" };
 
 export default async function handler(req, res) {
-  // CORS
+// CORS — dynamique et robuste
+const ORIGINS = new Set([
+  "https://oradia.fr",
+  "https://www.oradia.fr",
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "null" // autorise les tests en ouvrant index.html en local (file://) — à retirer ensuite si tu veux
+]);
+
+const origin = req.headers.origin || "";
+if (ORIGINS.has(origin)) {
+  res.setHeader("Access-Control-Allow-Origin", origin);
+} else {
+  // par défaut on autorise le domaine prod
   res.setHeader("Access-Control-Allow-Origin", "https://oradia.fr");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") return res.status(204).end();
+}
+res.setHeader("Vary", "Origin");
+res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+
+// Réfléchit dynamiquement les headers que le navigateur annonce en préflight
+const reqHeaders = req.headers["access-control-request-headers"];
+res.setHeader("Access-Control-Allow-Headers", reqHeaders ? reqHeaders : "Content-Type");
+
+// Cache le résultat du préflight pour 24h
+res.setHeader("Access-Control-Max-Age", "86400");
+
+// Préflight
+if (req.method === "OPTIONS") return res.status(204).end();
+
+// (facultatif, mais utile)
+res.setHeader("Content-Type", "application/json; charset=utf-8");
+
   if (req.method !== "POST") return res.status(405).json({ error: "Méthode non autorisée" });
 
   if (!process.env.OPENAI_API_KEY) {
