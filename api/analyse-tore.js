@@ -19,7 +19,13 @@ export default async function handler(req, res) {
 
     // Helpers
     const safe = v => (typeof v === "string" && v.trim()) ? v.trim() : "—";
-    const sym  = s => s === "🔺" ? "🔺" : (s === "⚫" ? "⚫" : "—");
+    const sym = s => {
+  if (!s || typeof s !== "string") return "—";
+  if (s.includes("⚫")) return "⚫";
+  if (s.includes("🔺")) return "🔺";
+  return "—";
+};
+
     const norm = o => ({ carte: safe(o?.carte), polarite: sym(o?.polarite), piece: sym(o?.piece) });
 
     // Familles du Tore
