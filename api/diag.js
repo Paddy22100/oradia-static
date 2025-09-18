@@ -1,14 +1,14 @@
-// Force Node.js (sinon Edge par défaut possible)
+// api/diag.js
+
+// On force l’exécution en runtime Node (sinon Edge par défaut)
 export const config = { runtime: "nodejs" };
 
 export default async function handler(req, res) {
+  console.log("Clé côté serveur:", process.env.OPENAI_API_KEY ? "présente" : "absente");
+
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.status(200).json({
-    runtime: "node",
     hasKey: !!process.env.OPENAI_API_KEY,
-    openaiKeyPrefix: process.env.OPENAI_API_KEY
-      ? process.env.OPENAI_API_KEY.slice(0, 8) + "..."
-      : null,
-    keys: Object.keys(process.env).filter(k => k.includes("OPEN")),
+    envKeys: Object.keys(process.env).filter(k => k.includes("OPEN")),
   });
 }
