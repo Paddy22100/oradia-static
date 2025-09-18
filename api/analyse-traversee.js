@@ -9,7 +9,7 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Méthode non autorisée" });
 
-  // Clé serveur
+  // Clé API côté serveur
   if (!process.env.OPENAI_API_KEY) {
     return res.status(500).json({ error: "OPENAI_API_KEY absente côté serveur" });
   }
@@ -18,10 +18,12 @@ export default async function handler(req, res) {
     const body = req.body || {};
     const b = body.boussole || {};
 
-    // Normalisation d’entrée
+    // Helpers
     const safe = v => (typeof v === "string" && v.trim()) ? v.trim() : "—";
-    const pick = o => ({ carte: safe(o?.carte), polarite: safe(o?.polarite) });
+    const sym = s => s === "🔺" ? "🔺" : (s === "⚫" ? "⚫" : "—"); // n'accepte que 🔺 ou ⚫, sinon —
+    const pick = o => ({ carte: safe(o?.carte), polarite: sym(o?.polarite) });
 
+    // Boussole
     const nord  = pick(b.nord);
     const sud   = pick(b.sud);
     const est   = pick(b.est);
@@ -31,60 +33,65 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Boussole incomplète" });
     }
 
-    // ——— Prompt "canon" Traversée ———
-    // Rappels de vocabulaire/structure:
-    // - Polarité: utiliser UNIQUEMENT les symboles universels: triangle (🔺) = énergie masculine ; rond (⚫) = énergie féminine.
-    // - Parler de "cartes passerelles" (PAS de mutantes) lorsque la pièce (tirée: 🔺/⚫) est différente de la polarité fixe de la carte.
-    // - Familles Traversée: L1 ÉMOTIONS, L2 BESOINS, L3 RÉVÉLATIONS, L4 ACTIONS, + 1 carte MÉMOIRES COSMOS (sans polarité propre).
-    // - Mémoire Cosmos n’a PAS de polarité; ne pas lui en attribuer.
-    // - Style Oradia: poétique, incarné, non ésotérique obscur; relier clairement à l’intention.
+    // Pièces tirées (peuvent être absentes → '—')
+    const piece = {
+      emotions:     sym(body?.mutations?.emotionsPiece),
+      besoins:      sym(body?.mutations?.besoinsPiece),
+      revelations:  sym(body?.mutations?.revelationsPiece),
+      actions:      sym(body?.mutations?.actionsPiece),
+    };
+
+    // Cartes passerelles (décidé côté serveur)
+    const isPass = (polCarte, polPiece) => (polCarte !== "—" && polPiece !== "—" && polCarte !== polPiece);
+    const pass = {
+      emotions:     isPass(nord.polarite,  piece.emotions),
+      besoins:      isPass(sud.polarite,   piece.besoins),
+      revelations:  isPass(est.polarite,   piece.revelations),
+      actions:      isPass(ouest.polarite, piece.actions),
+    };
+
+    const memoireCosmos = safe(body?.memoireCosmos);
+
+    // ——— Prompt strict : symboles + explication féminine/masculine, "cartes passerelles" ———
     const SYSTEM = `
 Tu es l’analyste officiel d’Oradia pour le Tirage de la Traversée.
 
-Règles de forme et de fond (à respecter strictement):
-- Polarité: utilise seulement triangle (🔺) pour l’énergie masculine et rond (⚫) pour l’énergie féminine. N’emploie jamais d’autres termes.
-- Lorsque la polarité de la PIÈCE tirée (🔺/⚫) diffère de la polarité FIXE de la carte: désigne la carte comme "carte passerelle" et formule la passerelle correspondante (transition, recadrage, opportunité).
-- Familles présentes (par lignes): 
-  L1 — ÉMOTIONS
-  L2 — BESOINS
-  L3 — RÉVÉLATIONS
-  L4 — ACTIONS
-  Carte MÉMOIRES COSMOS (sans polarité propre).
-- Affichage final EXACT (sans préambule, sans visuel) :
+Règles de forme et de fond :
+- Polarité : affiche toujours le symbole (⚫ ou 🔺).
+  ⚫ = énergie féminine, 🔺 = énergie masculine. Explique cette correspondance au lecteur de façon simple et concise si utile.
+- "Carte passerelle" UNIQUEMENT si le drapeau fourni (passerelle=true) pour la ligne concernée. Sinon, ne rien ajouter.
+- Mémoires Cosmos : pas de polarité.
+- Style Oradia : poétique, ancré, clair ; relie l’analyse à l’intention.
 
+Affichage final (sans préambule, sans visuel) :
 Votre Tirage de la traversée:
-Ligne 1 – ÉMOTIONS : {NomCarte} ({🔺 ou ⚫}) {— carte passerelle : … si la pièce ≠ polarité carte}
+Ligne 1 – ÉMOTIONS : {NomCarte} ({Symbole} = énergie féminine/masculine) {— carte passerelle : … si passerelle=true}
 Ligne 2 – BESOINS   : {…}
 Ligne 3 – RÉVÉLATIONS : {…}
 Ligne 4 – ACTIONS   : {…}
 Carte Mémoires Cosmos :
 {…}
 Synthèse du tirage :
-{… (ancrée, claire, reliée à l’intention)}
-
-- Si des données de profil (HD, Ennéagramme, Astro, etc.) manquent, reste générique, n’invente rien.
+{…}
 `.trim();
 
     const USER = `
 Intention: ${safe(body.intention)}
 
-Cartes tirées:
-- NORD (ÉMOTIONS): ${nord.carte} | polarité carte: ${nord.polarite} | pièce: ${safe(body?.mutations?.emotionsPiece)}
-- SUD  (BESOINS): ${sud.carte} | polarité carte: ${sud.polarite} | pièce: ${safe(body?.mutations?.besoinsPiece)}
-- EST  (RÉVÉLATIONS): ${est.carte} | polarité carte: ${est.polarite} | pièce: ${safe(body?.mutations?.revelationsPiece)}
-- OUEST(ACTIONS): ${ouest.carte} | polarité carte: ${ouest.polarite} | pièce: ${safe(body?.mutations?.actionsPiece)}
+Entrées normalisées (ne pas modifier les symboles) + flags passerelle:
+- L1 ÉMOTIONS     : nom="${nord.carte}",  symbole="${nord.polarite}",  piece="${piece.emotions}",    passerelle=${pass.emotions}
+- L2 BESOINS      : nom="${sud.carte}",   symbole="${sud.polarite}",   piece="${piece.besoins}",     passerelle=${pass.besoins}
+- L3 RÉVÉLATIONS  : nom="${est.carte}",   symbole="${est.polarite}",   piece="${piece.revelations}", passerelle=${pass.revelations}
+- L4 ACTIONS      : nom="${ouest.carte}", symbole="${ouest.polarite}", piece="${piece.actions}",     passerelle=${pass.actions}
+- Carte MÉMOIRES COSMOS: "${memoireCosmos}"
 
-Carte MÉMOIRES COSMOS: ${safe(body?.memoireCosmos)}
-
-Rappels:
-- Triangle (🔺) = énergie masculine ; Rond (⚫) = énergie féminine.
-- Dire "carte passerelle" si pièce ≠ polarité carte, et formuler la passerelle.
-- Ne pas attribuer de polarité à la carte Mémoires Cosmos.
-
-Rends UNIQUEMENT la structure demandée ci-dessus, remplie et propre.
+Consignes :
+- Réutilise EXACTEMENT les symboles fournis (🔺, ⚫, ou '—' → alors pas de symbole).
+- Ajoute “— carte passerelle : …” UNIQUEMENT si passerelle=true sur la ligne correspondante.
+- Mention explicative possible : "(⚫ = énergie féminine, 🔺 = énergie masculine)" lorsque pertinent.
 `.trim();
 
-    console.log("API Key visible côté serveur ?", process.env.OPENAI_API_KEY ? "OK" : "ABSENTE");
+    console.log("API Key côté serveur ?", process.env.OPENAI_API_KEY ? "OK" : "ABSENTE");
 
     // Timeout (25s)
     const ctrl = new AbortController();
