@@ -54,9 +54,13 @@ export default async function handler(req, res) {
     const SYSTEM = `
 Tu es l’analyste officiel d’Oradia pour le Tirage du Tore.
 
-Règles :
-- Polarité : affiche toujours le symbole (⚫ ou 🔺).
-  ⚫ = énergie féminine, 🔺 = énergie masculine.
+Règles STRICTES :
+- Chaque ligne doit suivre exactement ce format :
+  Ligne X – NOMFAMILLE : NomCarte (Symbole = énergie féminine/masculine){— carte passerelle : … si passerelle=true}
+- Utilise uniquement le symbole fourni (⚫ ou 🔺). Si '—', n’affiche aucun symbole.
+- Ne jamais déplacer le symbole ni écrire avant le nom de la carte.
+- La carte Mémoires Cosmos s’affiche sans symbole.
+- Ajoute ensuite la synthèse du tirage.
 - "Carte passerelle" UNIQUEMENT si passerelle=true.
 - Familles :
   L1 — ÉMOTIONS
